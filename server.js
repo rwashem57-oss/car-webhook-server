@@ -1,4 +1,6 @@
 // 🌐 سيرفر استقبال بيانات الشراء من روبلوكس + جلب الصورة الحقيقية + إرسالها لديسكورد
+// نسخة مطوّرة: embed أوضح وأكثر تنظيم (ألوان، صورة أكبر، وقت، وصف علوي)
+
 const express = require("express");
 const app = express();
 app.use(express.json());
@@ -7,6 +9,12 @@ app.use(express.json());
 const DISCORD_WEBHOOK_URL =
   process.env.DISCORD_WEBHOOK_URL ||
   "https://discord.com/api/webhooks/1532173462087405568/U2JGDHgNTNA4iz-VeXm3nsfhAAeocT93zS4GZERBv_bRMs4Ajmxv6wIymk6y25QTQGNX";
+
+// 🎨 ألوان مختلفة حسب نوع الدفع (Decimal color codes)
+const COLORS = {
+  ROBUX: 16766720, // ذهبي
+  CASH: 3066993, // أخضر
+};
 
 // 🖼️ يجيب رابط الصورة الحقيقي من Roblox Thumbnails API (مسموح لأننا مو جوا روبلوكس)
 async function getRobloxThumbnail(assetId) {
@@ -25,6 +33,65 @@ async function getRobloxThumbnail(assetId) {
     console.error("فشل جلب الصورة من روبلوكس:", err);
     return null;
   }
+}
+
+// 🧾 يبني رسالة الـ Embed بشكل منظم
+function buildEmbed({ buyerName, carName, priceText, isRobux, speed, totalOwned, imageUrl }) {
+  const paymentEmoji = isRobux ? "🟡" : "💵";
+  const paymentLabel = isRobux ? "روبكس (Robux)" : "كاش داخل اللعبة";
+  const color = isRobux ? COLORS.ROBUX : COLORS.CASH;
+
+  const embed = {
+    author: {
+      name: "Car Dealership • سجل المشتريات",
+    },
+    title: `🚗  عملية شراء جديدة — ${carName || "غير معروف"}`,
+    description: `**${buyerName || "غير معروف"}** اشترى سيارة **${carName || "غير معروف"}** للتو! 🎉`,
+    color,
+    fields: [
+      {
+        name: `${paymentEmoji}  السعر`,
+        value: `${priceText || "غير معروف"}`,
+        inline: true,
+      },
+      {
+        name: "💳  نوع الدفع",
+        value: paymentLabel,
+        inline: true,
+      },
+      {
+        name: "🏎️  السرعة",
+        value: `${speed ?? "غير محدد"}`,
+        inline: true,
+      },
+      {
+        name: "👥  عدد الملاك الحاليين",
+        value: `${totalOwned ?? 0}`,
+        inline: true,
+      },
+      {
+        name: "👤  المشتري",
+        value: `${buyerName || "غير معروف"}`,
+        inline: true,
+      },
+      {
+        name: "🕒  وقت العملية",
+        value: `<t:${Math.floor(Date.now() / 1000)}:f>`,
+        inline: true,
+      },
+    ],
+    footer: {
+      text: "Car Dealership System",
+    },
+    timestamp: new Date().toISOString(),
+  };
+
+  if (imageUrl) {
+    // صورة كبيرة وواضحة بدل الـ thumbnail الصغيرة
+    embed.image = { url: imageUrl };
+  }
+
+  return embed;
 }
 
 // 📩 نقطة الاستقبال اللي راح يستدعيها سكربت روبلوكس
@@ -47,30 +114,15 @@ app.post("/car-purchase", async (req, res) => {
       imageUrl = await getRobloxThumbnail(assetId);
     }
 
-    const embed = {
-      title: "🚗 عملية شراء جديدة!",
-      color: 3066993,
-      fields: [
-        { name: "المشتري", value: String(buyerName || "غير معروف"), inline: true },
-        { name: "السيارة", value: String(carName || "غير معروف"), inline: true },
-        { name: "السعر", value: String(priceText || "غير معروف"), inline: true },
-        {
-          name: "نوع الدفع",
-          value: isRobux ? "روبكس (Robux)" : "كاش داخل اللعبة",
-          inline: true,
-        },
-        { name: "السرعة", value: String(speed ?? "غير محدد"), inline: true },
-        {
-          name: "عدد الملاك الحاليين",
-          value: String(totalOwned ?? 0),
-          inline: true,
-        },
-      ],
-    };
-
-    if (imageUrl) {
-      embed.thumbnail = { url: imageUrl };
-    }
+    const embed = buildEmbed({
+      buyerName,
+      carName,
+      priceText,
+      isRobux,
+      speed,
+      totalOwned,
+      imageUrl,
+    });
 
     const discordRes = await fetch(DISCORD_WEBHOOK_URL, {
       method: "POST",
