@@ -1,0 +1,15 @@
+{
+  "name": "car-webhook-server",
+  "version": "1.0.0",
+  "description": "استقبال بيانات شراء السيارات من روبلوكس، جلب صورة السيارة الحقيقية، وإرسالها لديسكورد",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
