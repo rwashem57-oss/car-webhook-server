@@ -1,5 +1,6 @@
 // 🌐 سيرفر استقبال بيانات الشراء من روبلوكس + جلب الصورة الحقيقية + إرسالها لديسكورد
-// نسخة مطوّرة: embed أوضح وأكثر تنظيم (ألوان، صورة أكبر، وقت، وصف علوي)
+// نسخة مطوّرة: صورة أفاتار اللاعب + تاريخ إنشاء الحساب + وقت دخول السيرفر + الرصيد
+// + اللوحة المتولدة + تنبيه تلقائي (@here) إذا طلعت لوحة نادرة
 
 const express = require("express");
 const app = express();
@@ -10,13 +11,21 @@ const DISCORD_WEBHOOK_URL =
   process.env.DISCORD_WEBHOOK_URL ||
   "https://discord.com/api/webhooks/1532173462087405568/U2JGDHgNTNA4iz-VeXm3nsfhAAeocT93zS4GZERBv_bRMs4Ajmxv6wIymk6y25QTQGNX";
 
-// 🎨 ألوان مختلفة حسب نوع الدفع (Decimal color codes)
-const COLORS = {
+// 🔔 من تريد أن يُنبَّه عند لوحة نادرة (رتبة أو @here). مثال رتبة: "<@&123456789012345678>"
+const RARE_PLATE_MENTION = process.env.RARE_PLATE_MENTION || "@here";
+
+// 🎨 ألوان حسب نوع الدفع، وألوان خاصة تطغى عليها لو اللوحة نادرة
+const PAYMENT_COLORS = {
   ROBUX: 16766720, // ذهبي
   CASH: 3066993, // أخضر
 };
+const RARITY_COLORS = {
+  legendary: 15277667, // ذهبي لامع
+  very_rare: 10181046, // بنفسجي
+  rare: 3447003, // أزرق
+};
 
-// 🖼️ يجيب رابط الصورة الحقيقي من Roblox Thumbnails API (مسموح لأننا مو جوا روبلوكس)
+// 🖼️ يجيب صورة السيارة الحقيقية من Roblox Thumbnails API
 async function getRobloxThumbnail(assetId) {
   try {
     const res = await fetch(
@@ -27,68 +36,141 @@ async function getRobloxThumbnail(assetId) {
     if (entry && entry.state === "Completed" && entry.imageUrl) {
       return entry.imageUrl;
     }
-    console.log("لم يتم توليد الصورة بعد أو الأسيت غير صالح:", entry);
+    console.log("لم يتم توليد صورة السيارة بعد أو الأسيت غير صالح:", entry);
     return null;
   } catch (err) {
-    console.error("فشل جلب الصورة من روبلوكس:", err);
+    console.error("فشل جلب صورة السيارة من روبلوكس:", err);
+    return null;
+  }
+}
+
+// 🙂 يجيب صورة أفاتار اللاعب (Headshot) من Roblox Thumbnails API
+async function getAvatarThumbnail(userId) {
+  try {
+    const res = await fetch(
+      `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=420x420&format=Png&isCircular=false`
+    );
+    const data = await res.json();
+    const entry = data?.data?.[0];
+    if (entry && entry.state === "Completed" && entry.imageUrl) {
+      return entry.imageUrl;
+    }
+    console.log("لم يتم توليد صورة الأفاتار بعد:", entry);
+    return null;
+  } catch (err) {
+    console.error("فشل جلب صورة الأفاتار من روبلوكس:", err);
     return null;
   }
 }
 
 // 🧾 يبني رسالة الـ Embed بشكل منظم
-function buildEmbed({ buyerName, carName, priceText, isRobux, speed, totalOwned, imageUrl }) {
+function buildEmbed({
+  buyerName,
+  carName,
+  priceText,
+  isRobux,
+  speed,
+  totalOwned,
+  carImageUrl,
+  avatarUrl,
+  plateText,
+  isRarePlate,
+  rarityTier,
+  rarityLabel,
+  currentCash,
+  accountCreatedTimestamp,
+  serverJoinTimestamp,
+}) {
   const paymentEmoji = isRobux ? "🟡" : "💵";
   const paymentLabel = isRobux ? "روبكس (Robux)" : "كاش داخل اللعبة";
-  const color = isRobux ? COLORS.ROBUX : COLORS.CASH;
+
+  // اللون: نادر يطغى على لون طريقة الدفع
+  const color =
+    (isRarePlate && RARITY_COLORS[rarityTier]) ||
+    (isRobux ? PAYMENT_COLORS.ROBUX : PAYMENT_COLORS.CASH);
+
+  const titlePrefix = isRarePlate ? "🚨✨ " : "🚗  ";
+
+  const fields = [
+    {
+      name: `${paymentEmoji}  السعر`,
+      value: `${priceText || "غير معروف"}`,
+      inline: true,
+    },
+    {
+      name: "💳  نوع الدفع",
+      value: paymentLabel,
+      inline: true,
+    },
+    {
+      name: "🏎️  السرعة",
+      value: `${speed ?? "غير محدد"}`,
+      inline: true,
+    },
+    {
+      name: "🎟️  اللوحة",
+      value: `${plateText || "غير معروفة"}`,
+      inline: true,
+    },
+    {
+      name: "💰  الرصيد الحالي",
+      value: currentCash != null ? `${currentCash.toLocaleString("en-US")}` : "غير معروف",
+      inline: true,
+    },
+    {
+      name: "👥  عدد ملّاك هذي السيارة",
+      value: `${totalOwned ?? 0}`,
+      inline: true,
+    },
+  ];
+
+  if (accountCreatedTimestamp) {
+    fields.push({
+      name: "📅  تاريخ إنشاء حساب الروبلوكس",
+      value: `<t:${accountCreatedTimestamp}:D>`,
+      inline: true,
+    });
+  }
+
+  if (serverJoinTimestamp) {
+    fields.push({
+      name: "🕒  دخل هذا السيرفر",
+      value: `<t:${serverJoinTimestamp}:R>`,
+      inline: true,
+    });
+  }
+
+  if (isRarePlate) {
+    fields.push({
+      name: "🌟  درجة الندرة",
+      value: rarityLabel,
+      inline: true,
+    });
+  }
 
   const embed = {
     author: {
-      name: "Car Dealership • سجل المشتريات",
+      name: `${buyerName || "غير معروف"} — سجل المشتريات`,
+      icon_url: avatarUrl || undefined,
     },
-    title: `🚗  عملية شراء جديدة — ${carName || "غير معروف"}`,
-    description: `**${buyerName || "غير معروف"}** اشترى سيارة **${carName || "غير معروف"}** للتو! 🎉`,
+    title: `${titlePrefix}عملية شراء جديدة — ${carName || "غير معروف"}`,
+    description: isRarePlate
+      ? `**${buyerName}** اشترى **${carName}** وطلعت له لوحة **${rarityLabel}**! 🎉`
+      : `**${buyerName}** اشترى سيارة **${carName}** للتو! 🎉`,
     color,
-    fields: [
-      {
-        name: `${paymentEmoji}  السعر`,
-        value: `${priceText || "غير معروف"}`,
-        inline: true,
-      },
-      {
-        name: "💳  نوع الدفع",
-        value: paymentLabel,
-        inline: true,
-      },
-      {
-        name: "🏎️  السرعة",
-        value: `${speed ?? "غير محدد"}`,
-        inline: true,
-      },
-      {
-        name: "👥  عدد الملاك الحاليين",
-        value: `${totalOwned ?? 0}`,
-        inline: true,
-      },
-      {
-        name: "👤  المشتري",
-        value: `${buyerName || "غير معروف"}`,
-        inline: true,
-      },
-      {
-        name: "🕒  وقت العملية",
-        value: `<t:${Math.floor(Date.now() / 1000)}:f>`,
-        inline: true,
-      },
-    ],
+    fields,
     footer: {
       text: "Car Dealership System",
+      icon_url: avatarUrl || undefined,
     },
     timestamp: new Date().toISOString(),
   };
 
-  if (imageUrl) {
-    // صورة كبيرة وواضحة بدل الـ thumbnail الصغيرة
-    embed.image = { url: imageUrl };
+  if (carImageUrl) {
+    embed.image = { url: carImageUrl };
+  }
+  if (avatarUrl) {
+    embed.thumbnail = { url: avatarUrl };
   }
 
   return embed;
@@ -99,20 +181,28 @@ app.post("/car-purchase", async (req, res) => {
   try {
     const {
       buyerName,
+      userId,
       carName,
       priceText,
       isRobux,
       speed,
       totalOwned,
       assetId,
+      plateText,
+      isRarePlate,
+      rarityTier,
+      rarityLabel,
+      currentCash,
+      accountCreatedTimestamp,
+      serverJoinTimestamp,
     } = req.body;
 
     console.log("📦 طلب شراء جديد:", req.body);
 
-    let imageUrl = null;
-    if (assetId) {
-      imageUrl = await getRobloxThumbnail(assetId);
-    }
+    const [carImageUrl, avatarUrl] = await Promise.all([
+      assetId ? getRobloxThumbnail(assetId) : Promise.resolve(null),
+      userId ? getAvatarThumbnail(userId) : Promise.resolve(null),
+    ]);
 
     const embed = buildEmbed({
       buyerName,
@@ -121,16 +211,31 @@ app.post("/car-purchase", async (req, res) => {
       isRobux,
       speed,
       totalOwned,
-      imageUrl,
+      carImageUrl,
+      avatarUrl,
+      plateText,
+      isRarePlate,
+      rarityTier,
+      rarityLabel,
+      currentCash,
+      accountCreatedTimestamp,
+      serverJoinTimestamp,
     });
+
+    const messageBody = {
+      username: "Car Dealership Logs",
+      embeds: [embed],
+    };
+
+    // 🔔 تنبيه مباشر (منشن) إذا اللوحة نادرة
+    if (isRarePlate) {
+      messageBody.content = `${RARE_PLATE_MENTION} 🚨 **لوحة نادرة طلعت!** (${rarityLabel})`;
+    }
 
     const discordRes = await fetch(DISCORD_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: "Car Dealership Logs",
-        embeds: [embed],
-      }),
+      body: JSON.stringify(messageBody),
     });
 
     if (!discordRes.ok) {
@@ -139,7 +244,7 @@ app.post("/car-purchase", async (req, res) => {
       return res.status(500).json({ success: false, error: text });
     }
 
-    res.json({ success: true, imageFound: !!imageUrl });
+    res.json({ success: true, carImageFound: !!carImageUrl, avatarFound: !!avatarUrl });
   } catch (err) {
     console.error("خطأ عام:", err);
     res.status(500).json({ success: false, error: String(err) });
